@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import os
 from base64 import b64decode
 from urllib.parse import urlparse
@@ -9,6 +10,7 @@ import aiohttp
 from .schemas import ContentsResponse
 
 API_BASE_URL = 'https://api.github.com'
+ACCESS_TOKEN = os.getenv('ACCESS_TOKEN')
 CHUNK_SIZE = 1024
 
 
@@ -18,6 +20,7 @@ class AsyncRepoDownloader:
         repo_url: str,
         *,
         api_base_url: str = API_BASE_URL,
+        token: str | None = ACCESS_TOKEN,
         tasks_limit: int = 1,
     ) -> None:
         parsed_url = urlparse(repo_url)
@@ -26,6 +29,7 @@ class AsyncRepoDownloader:
         )
         self._base_url = api_base_url
         self._api_path = f'/repos/{self._repo_owner}/{self._repo_name}/contents'
+        self._headers = {'Authorization': f'Bearer {token}'} if token else None
         self._work_dir: str | None = None
         self._semaphore = asyncio.Semaphore(tasks_limit)
         self._tasks: set[asyncio.Task] = set()
@@ -44,9 +48,13 @@ class AsyncRepoDownloader:
         await self.__fetch_item('/')
         await asyncio.wait(self._tasks)
         self._tasks.clear()
+        logging.debug('Done')
 
     async def __fetch_item(self, path: str) -> None:
+        if self._semaphore.locked():
+            logging.debug('Semaphore is locked for %s', path)
         await self._semaphore.acquire()
+        logging.debug('Fetching %s', path)
         repo_item = await self.__get_item_metadata(path)
         if isinstance(repo_item, list):
             self._semaphore.release()
@@ -55,6 +63,8 @@ class AsyncRepoDownloader:
             self._tasks.add(asyncio.create_task(self.__write_file(repo_item)))
         elif repo_item.download_url:
             self._tasks.add(asyncio.create_task(self.__download_raw(repo_item)))
+        else:
+            logging.error("Can't download item: %s", repo_item.json())
 
     async def __fetch_dir(self, entries: list[ContentsResponse]) -> None:
         for entry in entries:
@@ -67,7 +77,7 @@ class AsyncRepoDownloader:
         item_path: str,
     ) -> ContentsResponse | list[ContentsResponse]:
         request_path = '/'.join((self._api_path, item_path)).rstrip('/')
-        async with aiohttp.ClientSession(self._base_url) as session:
+        async with aiohttp.ClientSession(self._base_url, headers=self._headers) as session:
             async with session.get(request_path) as resp:
                 resp.raise_for_status()
                 parsed_resp = await resp.json()
@@ -83,11 +93,14 @@ class AsyncRepoDownloader:
         async with aiofiles.open(file_path, 'wb') as file_d:
             await file_d.write(b64decode(file_contents.content))
         self._semaphore.release()
+        logging.debug('Semaphore is released for %s', file_contents.path)
 
     async def __download_raw(self, metadata: ContentsResponse) -> None:
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(headers=self._headers) as session:
             async with session.get(metadata.download_url) as resp:
                 await self.__write_chunks(self.__get_destination(metadata), resp)
+        self._semaphore.release()
+        logging.debug('Semaphore is released for %s', metadata.path)
 
     async def __write_chunks(self, path: str, resp: aiohttp.ClientResponse) -> None:
         async with aiofiles.open(path, 'wb') as file_d:
