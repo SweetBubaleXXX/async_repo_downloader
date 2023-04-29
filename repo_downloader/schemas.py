@@ -11,4 +11,4 @@ class ContentsResponse(BaseModel):
     content: str | None
     sha: str
     url: str
-    download_url: str
+    download_url: str | None
