@@ -62,9 +62,11 @@ class AsyncRepoDownloader:
         elif repo_item.content:
             self._tasks.add(asyncio.create_task(self.__write_file(repo_item)))
         elif repo_item.download_url:
+            logging.debug('Using raw url for %s', path)
             self._tasks.add(asyncio.create_task(self.__download_raw(repo_item)))
         else:
             logging.error("Can't download item: %s", repo_item.json())
+            self._semaphore.release()
 
     async def __fetch_dir(self, entries: list[ContentsResponse]) -> None:
         for entry in entries:
