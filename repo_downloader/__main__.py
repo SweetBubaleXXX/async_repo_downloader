@@ -9,7 +9,13 @@ parser = argparse.ArgumentParser()
 parser.add_argument('repo_url')
 parser.add_argument('download_path')
 parser.add_argument('-v', '--verbose', action='store_true')
-parser.add_argument('-t', '--tasks', type=int, default=3)
+parser.add_argument(
+    '-t',
+    '--tasks',
+    help='number of concurrent tasks',
+    type=int,
+    default=3,
+)
 
 
 async def main():
